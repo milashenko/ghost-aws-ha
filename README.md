@@ -2,7 +2,7 @@
 
 ## Architecture
 
-![alt text](Ghost-AWS-HA.jpg "Title")s
+![alt text](Ghost-AWS-HA.jpg "Title")
 
 ### Goals 
 
