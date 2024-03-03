@@ -20,10 +20,10 @@ In order to address the requirement, not only the MySQL compatible database is u
 
 Since Ghost app does not support multiple instances of the app running simultaneously, in order to achieve maximum availability and disaster recovery capabilities in case of a regional failure the following has been implemented:
 
-a. EFS, MySQL, Containers, NAT, VPC Endpoints are configured to run in multiple availability zones in the primary and secondary region.
-b. Pilot light Disaster Recovery architecture has been implemented, ensuring MySQL, EFS and container images are replicated to the secondary region.
-c. AWS CloudFront is configured with Origin Groups to fail over to the second region in case it cannot serve data from cache and primary region returns supported 5xx errors. AWS CloudFront's cache will give time for the second region to be promoted as primary.
-d. In order to promote secondary region to primary, EFS synchronization should be disabled to make replica in the secondary region writable, MySQL in the secondary region should be promoted to be writable. NB! No automation for the failover has been developed.
+- EFS, MySQL, Containers, NAT, VPC Endpoints are configured to run in multiple availability zones in the primary and secondary region.
+- Pilot light Disaster Recovery architecture has been implemented, ensuring MySQL, EFS and container images are replicated to the secondary region.
+- AWS CloudFront is configured with Origin Groups to fail over to the second region in case it cannot serve data from cache and primary region returns supported 5xx errors. AWS CloudFront's cache will give time for the second region to be promoted as primary.
+- In order to promote secondary region to primary, EFS synchronization should be disabled to make replica in the secondary region writable, MySQL in the secondary region should be promoted to be writable. NB! No automation for the failover has been developed.
 
 4. Observability must be taken into account when implementing the solution
 
