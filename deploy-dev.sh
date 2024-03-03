@@ -5,9 +5,7 @@ set -o xtrace
 export PRIMARY_REGION="eu-central-1"
 export ENV_NAME="dev"
 export APP_NAME="ghost"
-if [ ! -z "$CI" ]; then
-    IMAGE_TAG=${{ github.sha }}
-else
+if [ -z "$IMAGE_TAG" ]; then
     IMAGE_TAG="local-`date -u +"%Y%m%dT%H%M%S"`"
 fi
 echo "IMAGE_TAG=$IMAGE_TAG"

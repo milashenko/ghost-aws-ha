@@ -38,5 +38,7 @@ jobs:
 
     - name: Test Env
       id: testenv
+      env:
+        IMAGE_TAG: b${{ github.run_number }}a${{ github.run_attempt }}-${{ github.sha }}
       run: |
         ./deploy-dev.sh
