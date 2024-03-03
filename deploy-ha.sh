@@ -6,9 +6,14 @@ export PRIMARY_REGION="eu-central-1"
 export SECONDARY_REGION="eu-west-1"
 export ENV_NAME="prod"
 export APP_NAME="ghost"
-# export IMAGE_TAG=${{ github.sha }}
-export IMAGE_TAG=latest
+export DOMAIN_NAME="d7o5rsy6thbx9.cloudfront.net"
 ## End of Configuration
+
+if [ -z "$IMAGE_TAG" ]; then
+    echo "IMAGE_TAG environment variable must be set to know what to deploy"
+    exit 10
+fi
+echo "IMAGE_TAG=$IMAGE_TAG"
 
 ACCOUNT_ID=`aws sts get-caller-identity --query=Account --output=text`
 
@@ -23,37 +28,13 @@ export GLOBAL_BUCKET_NAME="$ENV_NAME-us-east-1-templates"
 aws s3 mb "s3://$GLOBAL_BUCKET_NAME" --region=us-east-1 || true
 
 
-#### ECR
-# Primary
-sam deploy --stack-name="$APP_NAME-ecr" \
-    --parameter-overrides="AppName=\"$APP_NAME\"" \
-    --tags="env=$ENV_NAME" \
-    --capabilities="CAPABILITY_NAMED_IAM" \
-    --region=$PRIMARY_REGION \
-    --s3-bucket=$PRIMARY_BUCKET_NAME \
-    --no-fail-on-empty-changeset \
-    --template-file 0.ecr.yaml || exit 2
-# Secondary
-sam deploy --stack-name="$APP_NAME-ecr" \
-    --parameter-overrides="AppName=\"$APP_NAME\"" \
-    --tags="env=$ENV_NAME" \
-    --capabilities="CAPABILITY_NAMED_IAM" \
-    --region=$SECONDARY_REGION \
-    --s3-bucket=$SECONDARY_BUCKET_NAME \
-    --no-fail-on-empty-changeset \
-    --template-file 0.ecr.yaml || exit 2
-
-#### Build container
-docker build -t $APP_NAME:latest . || exit 3
-# Push image to primary region
+#### Sync specified image primary to secondary
 export PRIMARY_ECR_URI=`aws cloudformation list-exports --query="Exports[?Name=='$APP_NAME-RepositoryUri'][Value]" --region=$PRIMARY_REGION --output=text` || exit 3
-docker tag $APP_NAME:latest $PRIMARY_ECR_URI:$IMAGE_TAG || exit 3
-aws ecr get-login-password --region $PRIMARY_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$PRIMARY_REGION.amazonaws.com || exit 3
-docker push $PRIMARY_ECR_URI:$IMAGE_TAG || exit 3
-
-# Push image to secondary region
 export SECONDARY_ECR_URI=`aws cloudformation list-exports --query="Exports[?Name=='$APP_NAME-RepositoryUri'][Value]" --region=$SECONDARY_REGION --output=text` || exit 3
-docker tag $APP_NAME:latest $SECONDARY_ECR_URI:$IMAGE_TAG || exit 3
+
+aws ecr get-login-password --region $PRIMARY_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$PRIMARY_REGION.amazonaws.com || exit 3
+docker pull $PRIMARY_ECR_URI:$IMAGE_TAG
+docker tag $PRIMARY_ECR_URI:$IMAGE_TAG $SECONDARY_ECR_URI:$IMAGE_TAG
 aws ecr get-login-password --region $SECONDARY_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$SECONDARY_REGION.amazonaws.com || exit 3
 docker push $SECONDARY_ECR_URI:$IMAGE_TAG || exit 3
 
@@ -167,7 +148,7 @@ sam deploy --stack-name="$ENV_NAME-aurora-mysql" \
 # Primary
 # According to https://ghost.org/docs/faq/clustering-sharding-multi-server/ max number of simultaniously running instances can be 1
 sam deploy --stack-name="$ENV_NAME-app" \
-    --parameter-overrides="EnvName=\"$ENV_NAME\" AppName=\"$APP_NAME\" ImageTag=\"$IMAGE_TAG\" MasterSecretName=\"$MASTER_SECRET_NAME\" DesiredCount=\"1\"" \
+    --parameter-overrides="EnvName=\"$ENV_NAME\" DomainName=\"$DOMAIN_NAME\" AppName=\"$APP_NAME\" ImageTag=\"$IMAGE_TAG\" MasterSecretName=\"$MASTER_SECRET_NAME\" DesiredCount=\"1\"" \
     --tags="env=$ENV_NAME" \
     --capabilities="CAPABILITY_NAMED_IAM" \
     --region=$PRIMARY_REGION \
@@ -177,7 +158,7 @@ sam deploy --stack-name="$ENV_NAME-app" \
 
 # Secondary region goes scaled down to 0
 sam deploy --stack-name="$ENV_NAME-app" \
-    --parameter-overrides="EnvName=\"$ENV_NAME\" AppName=\"$APP_NAME\" ImageTag=\"$IMAGE_TAG\" MasterSecretName=\"$MASTER_SECRET_NAME\" DesiredCount=\"0\"" \
+    --parameter-overrides="EnvName=\"$ENV_NAME\" DomainName=\"$DOMAIN_NAME\" AppName=\"$APP_NAME\" ImageTag=\"$IMAGE_TAG\" MasterSecretName=\"$MASTER_SECRET_NAME\" DesiredCount=\"0\"" \
     --tags="env=$ENV_NAME" \
     --capabilities="CAPABILITY_NAMED_IAM" \
     --region=$SECONDARY_REGION \

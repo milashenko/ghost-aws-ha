@@ -41,4 +41,5 @@ jobs:
       env:
         IMAGE_TAG: b${{ github.run_number }}a${{ github.run_attempt }}-${{ github.sha }}
       run: |
+        ./deploy-container-image.sh && \
         ./deploy-dev.sh

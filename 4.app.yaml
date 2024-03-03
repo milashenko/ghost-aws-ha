@@ -26,9 +26,16 @@ Parameters:
     Type: Number
     Description: Number of container instances to run behind loadbalancer.
     Default: 0
+  DomainName:
+    Type: String
+    Description: Custom DNS Name to use. Otherwise ALB default will be used
+    Default: ""
   # ExistingCertificate:
   #   Type: String
   #   Description: Wildcard certificate (Must be in us-east-1)
+
+Conditions:
+  DomainProvided: !Not [!Equals [!Ref DomainName, '']]
 
 Resources:
   ## ALB
@@ -245,8 +252,12 @@ Resources:
         Environment:
           # - Name: NODE_ENV
           #   Value: development
-          # - Name: url
-          #   Value: !Sub 'http://${EnvName}-api.${AWS::Region}.elb.amazonaws.com'
+          - Name: url
+            Value:
+              Fn::If:
+                - DomainProvided
+                - !Sub "http://DomainProvided"
+                - !Sub "http://${LoadBalancer.DNSName}"
           # - Name: DEBUG
           #   Value: ghost:*,ghost-config
           - Name: database__client

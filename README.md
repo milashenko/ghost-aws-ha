@@ -54,6 +54,11 @@ In order to configure global resources - edit configuration section in the `depl
 - AWS Role to run GitHub Actions. Note AWS Role Arn in console for further use with GitHub Actions
 - AWS repository for docker containers
 
+#### Build application
+For the purpose of POC application is represented with a container image based on original ghost:5
+In order to run either dev or ha environments, the container image should be built using `deploy-container-image.sh`
+It will build and push the image to a ECR repository created in the Globals section above
+
 #### Dev environment
 Any single region environment is created with `deploy-dev.sh`. Edit configuration section and run it locally to:
 - Build container image and push it to ECR
@@ -66,17 +71,17 @@ High availability environment is created with `deploy-ha.sh`. Edit configuration
 - Setup synchronization of EFS and Aurora MySQL
 - Create CloudFront distribution with OriginGroup using respectively Primary and Secondary regions
 
-### Mutli-Region Disaser Recovery
+### Mutli-Region Disaster Recovery
 1. Start HA stack, 
 2. Open Load Balancer address in the primary region via HTTP and type "/ghost/setup" page to setup Ghost
 3. Crete a two pages A and B using primary LB
 4. Ensure CloudFront shows page A. Don't open page B, so that CloudFront doesn't cache it
 5. Stop primary - test if CloudFront shows page A. It should be cached, and still available. Try open page B, it should show error.
 6. Make EFS and MySQL in the second region writable, start container instance in the secondary region.
-7. CloudFront should start showing page B, as well as other pages.
+7. Switch origin in the CloudFront distribution from primary to secondary. It should start showing page B, as well as other pages.
 8. Create post using load balancer in the secondary region to ensure it works as expected
 
-### Mutli-Region Recovery after Disaser Recovery
+### Mutli-Region Recovery after Disaster Recovery
 To be defined
 
 ### Delete All Posts Lambda

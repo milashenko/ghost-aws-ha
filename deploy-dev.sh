@@ -5,26 +5,19 @@ set -o xtrace
 export PRIMARY_REGION="eu-central-1"
 export ENV_NAME="dev"
 export APP_NAME="ghost"
+## End of Configuration
+
 if [ -z "$IMAGE_TAG" ]; then
-    IMAGE_TAG="local-`date -u +"%Y%m%dT%H%M%S"`"
+    echo "IMAGE_TAG environment variable must be set to know what to deploy"
+    exit 10
 fi
 echo "IMAGE_TAG=$IMAGE_TAG"
-## End of Configuration
 
 ACCOUNT_ID=`aws sts get-caller-identity --query=Account --output=text`
 
 # Cloudformation buckets
 export PRIMARY_BUCKET_NAME="$ENV_NAME-$PRIMARY_REGION-templates"
 aws s3 mb "s3://$PRIMARY_BUCKET_NAME" --region=$PRIMARY_REGION || true
-
-
-#### Build container
-docker build -t $APP_NAME:latest . || exit 3
-# Push image to primary region
-export PRIMARY_ECR_URI=`aws cloudformation list-exports --query="Exports[?Name=='$APP_NAME-RepositoryUri'][Value]" --region=$PRIMARY_REGION --output=text` || exit 3
-docker tag $APP_NAME:latest $PRIMARY_ECR_URI:$IMAGE_TAG || exit 3
-aws ecr get-login-password --region $PRIMARY_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$PRIMARY_REGION.amazonaws.com || exit 3
-docker push $PRIMARY_ECR_URI:$IMAGE_TAG || exit 3
 
 #### Resource Group
 # Primary

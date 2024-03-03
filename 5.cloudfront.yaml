@@ -23,11 +23,10 @@ Resources:
     Properties:
       DistributionConfig:
         DefaultCacheBehavior:
-          TargetOriginId: PrimarySecondary
+          TargetOriginId: primary
+          # TargetOriginId: PrimarySecondary
           ViewerProtocolPolicy: 'allow-all'
-          AllowedMethods:
-          - GET
-          - HEAD
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE] 
           CachedMethods:
           - GET
           - HEAD
@@ -60,27 +59,69 @@ Resources:
               OriginReadTimeout: 30
               OriginSSLProtocols:
                 - TLSv1.2
-        OriginGroups:
-          Items: 
-            - FailoverCriteria: 
-                StatusCodes: 
-                  Items: 
-                    # - 400, 403, 404, 416
-                    - 500
-                    - 502
-                    - 503
-                    - 504
-                  Quantity: 4
-              Id: PrimarySecondary
-              Members: 
-                Items: 
-                  - OriginId: primary
-                  - OriginId: secondary
-                Quantity: 2
-          Quantity: 1
+        # OriginGroups:
+        #   Items: 
+        #     - FailoverCriteria: 
+        #         StatusCodes: 
+        #           Items: 
+        #             # - 400, 403, 404, 416
+        #             - 500
+        #             - 502
+        #             - 503
+        #             - 504
+        #           Quantity: 4
+        #       Id: PrimarySecondary
+        #       Members: 
+        #         Items: 
+        #           - OriginId: primary
+        #           - OriginId: secondary
+        #         Quantity: 2
+        #   Quantity: 1
         PriceClass: 'PriceClass_All'
-        # WebACLId: !Ref GlobalWafArn
+        WebACLId: !GetAtt WafCloudFront.Arn
 
+  WafCloudFront:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub '${EnvName}-Waf-cloudfront'
+      Scope: CLOUDFRONT
+      Description:  ACL with AWS Managed Rules
+      DefaultAction: 
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub '${EnvName}-Waf-WebACL-cloudfront'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvName}-cloudfront'
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+      Rules: 
+        - Name: AWS-AWSManagedRulesAmazonIpReputationList
+          Priority: 0
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${EnvName}-cloudfront-AWSManagedRulesAmazonIpReputationList'
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+        - Name: AWS-AWSManagedRulesCommonRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${EnvName}-cloudfront-AWSManagedRulesCommonRuleSet'
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
 # Outputs:
 #   VPC:
 #     Description: A reference to the created VPC
