@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Creates a MySQL Aurora cluster in a single region
+
+Parameters:
+  EnvName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    AllowedPattern: ^[a-zA-Z0-9-]*$
+    ConstraintDescription: Only alphanumeric values are allowed
+  MasterSecretName:
+    Description: Name of the secret containing the DB master user and password
+    Type: String
+
+  DBEngineVersion:
+    Description: The database engine Version
+    Type: String
+    Default: 8.0.mysql_aurora.3.04.1
+    AllowedValues:
+      - 8.0.mysql_aurora.3.04.1
+  DBPort:
+    Description: Database port
+    Type: Number
+    Default: 3306
+  DBInstanceClass:
+    Description: The database instance type
+    Type: String
+    Default: db.r5.large
+    AllowedValues:
+      - db.r5.large
+      - db.r6i.large
+      - db.r6g.large
+      - db.r7i.large
+      - db.r7g.large
+  ExistingGlobalDbArn:
+    Description: Existing Global Database Name (Optional)
+    Type: String
+    Default: ""
+Conditions:
+  NotJoinGlobalDB: !Equals [!Ref ExistingGlobalDbArn, ""]
+  JoinGlobalDB:
+    Fn::Not:
+    - !Equals 
+      - !Ref ExistingGlobalDbArn
+      - ''
+
+Resources:
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Ref EnvName
+      SubnetIds:
+        !Split
+          - ","
+          - Fn::ImportValue:
+              !Sub "${EnvName}-PrivateSubnets"
+
+  DbSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub ${EnvName}-db
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvName}-VPC"
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}'
+      - Key: StackID
+        Value: !Ref 'AWS::StackId'
+        
+  DbSecurityGroupIngress:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !GetAtt 'DbSecurityGroup.GroupId'
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref DbSecurityGroup
+      Description: 'Self Reference'
+
+  SecondaryAuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Condition: JoinGlobalDB
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    # DeletionPolicy: Snapshot
+    # UpdateReplacePolicy: Snapshot
+    Properties:
+      # DBClusterIdentifier: !Ref 'AWS::StackId'
+      EnableGlobalWriteForwarding: true
+      Engine: aurora-mysql
+      Port: !Ref DBPort
+      GlobalClusterIdentifier: !Ref ExistingGlobalDbArn
+      EngineVersion: !Ref DBEngineVersion
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+      - !Ref DbSecurityGroup
+      EnableIAMDatabaseAuthentication: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvName
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+
+  MainAuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Condition: NotJoinGlobalDB
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Delete
+    # UpdateReplacePolicy: Snapshot
+    Properties:
+      # DBClusterIdentifier: !Ref 'AWS::StackId'
+      Engine: aurora-mysql
+      Port: !Ref DBPort
+      EngineVersion: !Ref DBEngineVersion
+      MasterUsername: !Sub '{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MasterSecretName}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MasterSecretName}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+      - !Ref DbSecurityGroup
+      EnableIAMDatabaseAuthentication: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvName
+        - Key: StackID
+          Value: !Ref 'AWS::StackId'
+
+  RDSDBInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier:
+        !If [JoinGlobalDB, !Ref SecondaryAuroraDBCluster, !Ref MainAuroraDBCluster]
+      DBInstanceClass: !Ref DBInstanceClass
+      DBSubnetGroupName:
+        Ref: DBSubnetGroup
+      Engine: aurora-mysql
+      PubliclyAccessible: "false"
+      Tags:
+        - Key: Application
+          Value: !Ref "AWS::StackId"
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-db-instance1"
+  
+  GlobalCluster:
+    Type: 'AWS::RDS::GlobalCluster'
+    Condition: NotJoinGlobalDB
+    Properties:
+      GlobalClusterIdentifier: !Sub "${EnvName}-global"
+      SourceDBClusterIdentifier: !Ref MainAuroraDBCluster
+
+  SecretAuroraClusterAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Condition: NotJoinGlobalDB
+    Properties:
+      SecretId: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MasterSecretName}
+      TargetId: !Ref MainAuroraDBCluster
+      TargetType: AWS::RDS::DBCluster
+
+Outputs:
+  GlobalCluster:
+    Condition: NotJoinGlobalDB
+    Description: Globad cluster ID
+    Value: !Ref GlobalCluster
+    Export:
+      Name: !Sub '${EnvName}-GlobalCluster'
+  DBClusterArn:
+    Description: ARN of the cluster
+    Value: !If [JoinGlobalDB, !GetAtt SecondaryAuroraDBCluster.DBClusterArn, !GetAtt MainAuroraDBCluster.DBClusterArn]
+    Export:
+      Name: !Sub '${EnvName}-DBClusterArn'
+  DBAddress:
+    Description: DB Connection endpoint. In case of secondary - read only endpoint
+    Value: !If [JoinGlobalDB, !GetAtt SecondaryAuroraDBCluster.ReadEndpoint.Address, !GetAtt MainAuroraDBCluster.Endpoint.Address]
+    Export:
+      Name: !Sub '${EnvName}-DBAddress'
+
+  DbSecurityGroupGroupId:
+    Description: 'DbSecurityGroup.GroupId'
+    Value: !GetAtt 'DbSecurityGroup.GroupId'
+    Export:
+      Name: !Sub '${EnvName}-DbSecurityGroup-GroupId'

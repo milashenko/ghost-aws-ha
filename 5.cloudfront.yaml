@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+
+Parameters:
+  EnvName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    AllowedPattern: ^[a-zA-Z0-9-]*$
+    ConstraintDescription: Only alphanumeric values are allowed
+  PrimaryOriginDnsName:
+    Description: DNS name of ALB in the primary region
+    Type: String
+  SecondaryOriginDnsName:
+    Description: DNS name of ALB in the secondary region
+    Type: String
+
+  
+Resources:
+
+  CloudFrontDistribution:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior:
+          TargetOriginId: PrimarySecondary
+          ViewerProtocolPolicy: 'allow-all'
+          AllowedMethods:
+          - GET
+          - HEAD
+          CachedMethods:
+          - GET
+          - HEAD
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # CachingOptimized
+        DefaultRootObject: ""
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: false
+        Origins:
+          - DomainName: !Ref PrimaryOriginDnsName
+            Id: primary
+            CustomOriginConfig:
+              HTTPPort: 80
+              # HTTPSPort: 443
+              OriginKeepaliveTimeout: 60
+              OriginProtocolPolicy: http-only
+              # OriginProtocolPolicy: https-only
+              OriginReadTimeout: 30
+              OriginSSLProtocols:
+                - TLSv1.2
+          - DomainName: !Ref SecondaryOriginDnsName
+            Id: secondary
+            CustomOriginConfig:
+              HTTPPort: 80
+              # HTTPSPort: 443
+              OriginKeepaliveTimeout: 60
+              OriginProtocolPolicy: http-only
+              # OriginProtocolPolicy: https-only
+              OriginReadTimeout: 30
+              OriginSSLProtocols:
+                - TLSv1.2
+        OriginGroups:
+          Items: 
+            - FailoverCriteria: 
+                StatusCodes: 
+                  Items: 
+                    # - 400, 403, 404, 416
+                    - 500
+                    - 502
+                    - 503
+                    - 504
+                  Quantity: 4
+              Id: PrimarySecondary
+              Members: 
+                Items: 
+                  - OriginId: primary
+                  - OriginId: secondary
+                Quantity: 2
+          Quantity: 1
+        PriceClass: 'PriceClass_All'
+        # WebACLId: !Ref GlobalWafArn
+
+# Outputs:
+#   VPC:
+#     Description: A reference to the created VPC
+#     Value: !Ref VPC
+#     Export:
+#       Name: !Sub '${EnvName}-VPC'

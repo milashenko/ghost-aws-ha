@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Creates a MySQL Aurora cluster in a single region
+
+Parameters:
+  EnvName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    AllowedPattern: ^[a-zA-Z0-9-]*$
+    ConstraintDescription: Only alphanumeric values are allowed
+  ReplicateToFileSystemId:
+    Description: The ID of the destination Amazon EFS file system.
+    Type: String
+    Default: ""
+  DestinationRegion:
+    Description: Region where data should be replicated
+    Type: String
+    Default: ""
+
+Conditions:
+  NotReplicate: !Equals [!Ref ReplicateToFileSystemId, ""]
+Resources:
+  EfsVPCEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvName}-VPC
+      SubnetIds:
+        - Fn::ImportValue: !Sub "${EnvName}-PrivateSubnet1"
+        - Fn::ImportValue: !Sub "${EnvName}-PrivateSubnet2"
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.elasticfilesystem'
+      VpcEndpointType: Interface
+
+  EfsSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub ${EnvName}-efs
+      VpcId: 
+        Fn::ImportValue: !Sub ${EnvName}-VPC
+
+  EfsFileSystem:
+    Type: 'AWS::EFS::FileSystem'
+    Properties:
+      BackupPolicy:
+        Status: DISABLED ## TBD
+      PerformanceMode: generalPurpose
+      FileSystemProtection:
+        ReplicationOverwriteProtection:
+          Fn::If:
+            - NotReplicate
+            - DISABLED
+            - ENABLED
+      ReplicationConfiguration:
+        Fn::If:
+          - NotReplicate
+          - !Ref AWS::NoValue
+          - Destinations:
+            - FileSystemId: !Ref ReplicateToFileSystemId
+              Region: !Ref DestinationRegion
+      ThroughputMode: bursting
+      Encrypted: false
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub '${EnvName}'
+
+  MountTargetResource1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EfsFileSystem
+      SubnetId:
+        Fn::ImportValue:
+          !Sub "${EnvName}-PrivateSubnet1"
+      SecurityGroups:
+      - !Ref EfsSecurityGroup
+  MountTargetResource2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EfsFileSystem
+      SubnetId:
+        Fn::ImportValue:
+          !Sub "${EnvName}-PrivateSubnet2"
+      SecurityGroups:
+      - !Ref EfsSecurityGroup
+
+  EfsAccessPoint:
+    Type: 'AWS::EFS::AccessPoint'
+    Properties:
+      FileSystemId: !Ref EfsFileSystem
+      PosixUser:
+        Uid: "1000"
+        Gid: "1000"
+      RootDirectory:
+        CreationInfo:
+          OwnerGid: "1000"
+          OwnerUid: "1000"
+          Permissions: "0755"
+        Path: "/data"
+
+Outputs:
+  EfsSecurityGroup:
+    Value: !Ref EfsSecurityGroup
+    Export:
+      Name: !Sub '${EnvName}-EfsSecurityGroup'
+  AccessPointId:
+    Value: !Ref EfsAccessPoint
+    Export:
+      Name: !Sub '${EnvName}-AccessPointId'
+  FilesystemId:
+    Value: !Ref EfsFileSystem
+    Export:
+      Name: !Sub '${EnvName}-FilesystemId'
+  FilesystemArn:
+    Value: !GetAtt EfsFileSystem.Arn
+    Export:
+      Name: !Sub '${EnvName}-FilesystemArn'

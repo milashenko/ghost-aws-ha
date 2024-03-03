@@ -1,0 +1,358 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Creates a MySQL Aurora cluster in a single region
+
+Parameters:
+  EnvName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    AllowedPattern: ^[a-zA-Z0-9-]*$
+    ConstraintDescription: Only alphanumeric values are allowed
+  AppName:
+    Description: Name of the application
+    Type: String
+    AllowedPattern: ^[a-zA-Z0-9-]*$
+    ConstraintDescription: Only alphanumeric values are allowed
+    Default: ghost
+  MasterSecretName:
+    Description: Name of the secret containing the DB master user and password
+    Type: String
+  ImageTag:
+    Description: Docker image to use
+    Type: String
+    Default: latest
+  DesiredCount:
+    Type: Number
+    Description: Number of container instances to run behind loadbalancer.
+    Default: 0
+  # ExistingCertificate:
+  #   Type: String
+  #   Description: Wildcard certificate (Must be in us-east-1)
+
+Resources:
+  ## ALB
+  LoadBalancerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub ${EnvName}-${AppName}-alb
+      VpcId: 
+        Fn::ImportValue: !Sub ${EnvName}-VPC
+  LoadBalancerSecurityGroupInHttpFromWorld:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: '0.0.0.0/0'
+  # LoadBalancerSecurityGroupInHttpsFromWorld:
+  #   Type: 'AWS::EC2::SecurityGroupIngress'
+  #   Properties:
+  #     GroupId: !Ref LoadBalancerSecurityGroup
+  #     IpProtocol: tcp
+  #     FromPort: 443
+  #     ToPort: 443
+  #     CidrIp: '0.0.0.0/0'
+  LoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Type: application
+      Name: !Sub ${EnvName}-${AppName}
+      IpAddressType: ipv4
+      Scheme: internet-facing
+      SecurityGroups:
+      - !Ref LoadBalancerSecurityGroup
+      Subnets:
+        !Split
+          - ","
+          - Fn::ImportValue:
+              !Sub "${EnvName}-PublicSubnets"
+      Tags:
+        - 
+          Key: Name
+          Value: !Sub ${EnvName}
+        -
+          Key: StackID
+          Value: !Ref 'AWS::StackId'
+
+  HttpListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - RedirectConfig:
+            Port: '443'
+            Protocol: HTTPS
+            StatusCode: 'HTTP_301'
+          Type: redirect
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+  # HttpsListener:
+  #   Type: 'AWS::ElasticLoadBalancingV2::Listener'
+  #   Properties:
+  #     Certificates:
+  #     - CertificateArn: !Ref ExistingCertificate
+  #     DefaultActions:
+  #       - FixedResponseConfig:
+  #           ContentType: 'text/plain'
+  #           MessageBody: default
+  #           StatusCode: '404'
+  #         Type: 'fixed-response'
+  #     LoadBalancerArn: !Ref LoadBalancer
+  #     Port: 443
+  #     Protocol: HTTPS
+
+
+  TargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: !Sub ${EnvName}-${AppName}
+      Protocol: HTTP
+      Port: 80 # overriden when containers are attached
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvName}-VPC"
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: '/'
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher:
+        HttpCode: '200-399' 
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: 60
+
+  LoadBalancerListenerRuleAll:
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - '/*'
+      ListenerArn: !Ref HttpListener
+      # ListenerArn: !Ref HttpsListener
+      Priority: 3
+
+  # Route53RecordAlb:
+  #   Type: 'AWS::Route53::RecordSetGroup'
+  #   Properties:
+  #     HostedZoneId: !Ref HostedZoneId
+  #     RecordSets:
+  #     - Name:
+  #         !Join
+  #         - "-"
+  #         - 
+  #           - Fn::ImportValue: !Sub "${VpcStack}-EnvName"
+  #           - !Sub "api.${HostedZone}"
+  #       Type: A
+  #       AliasTarget:
+  #         HostedZoneId: !GetAtt 'LoadBalancer.CanonicalHostedZoneID'
+  #         DNSName: !GetAtt 'LoadBalancer.DNSName'
+  ## ECS
+  Cluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Ref EnvName
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: !Ref EnvName
+        -
+          Key: StackID
+          Value: !Ref 'AWS::StackId'
+
+  TaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${EnvName}-${AWS::Region}-TaskExecutionRole'
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 'ecs-tasks.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Policies:
+      - PolicyName: AmazonECSTaskExecutionRolePolicy # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'ecr:GetAuthorizationToken'
+            - 'ecr:BatchCheckLayerAvailability'
+            - 'ecr:GetDownloadUrlForLayer'
+            - 'ecr:BatchGetImage'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - 'logs:CreateLogStream'
+            - 'logs:PutLogEvents'
+            Resource: !GetAtt 'LogGroup.Arn'
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MasterSecretName}*
+  TaskRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${EnvName}-${AWS::Region}-TaskRole'
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 'ecs-tasks.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Policies:
+      - PolicyName: IAM
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - elasticfilesystem:ClientMount
+            - elasticfilesystem:ClientWrite
+            - elasticfilesystem:ClientRootAccess
+            Resource:
+              Fn::Sub:
+                - arn:aws:elasticfilesystem:${AWS::Region}:${AWS::AccountId}:file-system/${FilesystemId}
+                - FilesystemId:
+                    Fn::ImportValue: !Sub "${EnvName}-FilesystemId"
+  TaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      ContainerDefinitions:
+      - Name: !Ref AppName
+        Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AppName}:${ImageTag}"
+        PortMappings:
+        - ContainerPort: 2368
+          Protocol: tcp
+        Essential: true
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            'awslogs-region': !Ref 'AWS::Region'
+            'awslogs-group': !Ref LogGroup
+            'awslogs-stream-prefix': !Ref AppName
+        MountPoints:
+          - ContainerPath: /var/lib/ghost/content
+            SourceVolume: efs-server-AP
+        Environment:
+          # - Name: NODE_ENV
+          #   Value: development
+          # - Name: url
+          #   Value: !Sub 'http://${EnvName}-api.${AWS::Region}.elb.amazonaws.com'
+          # - Name: DEBUG
+          #   Value: ghost:*,ghost-config
+          - Name: database__client
+            Value: mysql
+          - Name: database__connection__host
+            Value:
+              Fn::ImportValue: !Sub "${EnvName}-DBAddress"
+          # - Name: database__connection__host
+          #   Value: !Sub '{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MasterSecretName}:SecretString:host}}'
+          - Name: database__connection__user
+            Value: !Sub '{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MasterSecretName}:SecretString:username}}'
+          - Name: database__connection__database
+            Value: !Ref AppName
+          - Name: logging__transports
+            Value: '["stdout"]'
+          # - Name: logging__level
+          #   Value: debug
+        Secrets: 
+          - Name: database__connection__password
+            ValueFrom: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MasterSecretName}:password::'
+            ## the very special syntax to get value of a password attribute
+      Volumes: 
+        - Name: efs-server-AP
+          EFSVolumeConfiguration: 
+            FilesystemId:
+              Fn::ImportValue: !Sub "${EnvName}-FilesystemId"
+            TransitEncryption: ENABLED
+            AuthorizationConfig: 
+              AccessPointId:
+                Fn::ImportValue: !Sub "${EnvName}-AccessPointId"
+              IAM: ENABLED
+      Cpu: 1024
+      Memory: 2048
+      ExecutionRoleArn: !GetAtt 'TaskExecutionRole.Arn'
+      Family: !Sub '${EnvName}-${AppName}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      TaskRoleArn: !GetAtt 'TaskRole.Arn'
+  LogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/ecs/${EnvName}-${AppName}'
+      RetentionInDays: 7
+  ServiceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub '${EnvName}-${AppName}-service'
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvName}-VPC"
+      SecurityGroupIngress:
+      - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+        FromPort: 2368
+        ToPort: 2368
+        IpProtocol: tcp
+
+  ClusterServiceSecurityGroupIngress:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub "${EnvName}-DbSecurityGroup-GroupId"
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref ServiceSecurityGroup
+      Description: 'Access to Fargate SG'
+
+  Service:
+    DependsOn: LoadBalancerListenerRuleAll
+    Type: 'AWS::ECS::Service'
+    Properties:
+      Cluster: !Ref Cluster
+      ServiceName: !Sub ${AppName}
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 0
+      LaunchType: FARGATE
+      LoadBalancers:
+      - ContainerName: !Sub ${AppName}
+        ContainerPort: 2368
+        TargetGroupArn: !Ref TargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+          - !Ref ServiceSecurityGroup
+          Subnets:
+            !Split
+              - ","
+              - Fn::ImportValue:
+                  !Sub "${EnvName}-PrivateSubnets"
+      TaskDefinition: !Ref TaskDefinition
+
+  EfsSecurityGroupIngress:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${EnvName}-EfsSecurityGroup"
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref ServiceSecurityGroup
+Outputs:
+  LoadBalancerDNSName:
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: !Sub '${EnvName}-LoadBalancer-DNSName'
