@@ -185,11 +185,6 @@ sam deploy --stack-name="$ENV_NAME-app" \
     --no-fail-on-empty-changeset \
     --template-file 4.app.yaml || exit 2
 
-
-#     # 1. Update primary fargate to start instance
-#     # 2. Open load balancer http://***.elb.amazonaws.com/ghost/setup to setup password
-#     # 3. Update secondary fargate to start instance
-
 export PRIMARY_ALB=`aws cloudformation list-exports --query="Exports[?Name=='$ENV_NAME-LoadBalancer-DNSName'][Value]" --region=$PRIMARY_REGION --output=text`
 echo "PRIMARY_ALB=$PRIMARY_ALB"
 export SECONDARY_ALB=`aws cloudformation list-exports --query="Exports[?Name=='$ENV_NAME-LoadBalancer-DNSName'][Value]" --region=$SECONDARY_REGION --output=text`
@@ -202,3 +197,26 @@ sam deploy --stack-name="$ENV_NAME-cloudfront" \
     --s3-bucket=$GLOBAL_BUCKET_NAME \
     --no-fail-on-empty-changeset \
     --template-file 5.cloudfront.yaml || exit 2
+
+#### Delete All Lambda
+# Primary
+cd ./lambda/delete-posts
+sam build && sam deploy --stack-name="$ENV_NAME-lambda-delete-posts" \
+    --parameter-overrides="GhostUrl=\"$PRIMARY_ALB\"" \
+    --tags="env=$ENV_NAME" \
+    --capabilities="CAPABILITY_NAMED_IAM" \
+    --region=$PRIMARY_REGION \
+    --s3-bucket=$PRIMARY_BUCKET_NAME \
+    --no-fail-on-empty-changeset \
+    --template-file template.yaml || exit 2
+
+# Secondary
+cd ./lambda/delete-posts
+sam build && sam deploy --stack-name="$ENV_NAME-lambda-delete-posts" \
+    --parameter-overrides="GhostUrl=\"$SECONDARY_ALB\"" \
+    --tags="env=$ENV_NAME" \
+    --capabilities="CAPABILITY_NAMED_IAM" \
+    --region=$SECONDARY_REGION \
+    --s3-bucket=$SECONDARY_BUCKET_NAME \
+    --no-fail-on-empty-changeset \
+    --template-file template.yaml || exit 2

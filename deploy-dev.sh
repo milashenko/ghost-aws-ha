@@ -87,9 +87,9 @@ sam deploy --stack-name="$ENV_NAME-aurora-mysql" \
     --no-fail-on-empty-changeset \
     --template-file 2.aurora-mysql.yaml || exit 2
 
-# #### Main APP
-# Primary
-# According to https://ghost.org/docs/faq/clustering-sharding-multi-server/ max number of simultaniously running instances can be 1
+### Main APP
+Primary
+According to https://ghost.org/docs/faq/clustering-sharding-multi-server/ max number of simultaniously running instances can be 1
 sam deploy --stack-name="$ENV_NAME-app" \
     --parameter-overrides="EnvName=\"$ENV_NAME\" AppName=\"$APP_NAME\" ImageTag=\"$IMAGE_TAG\" MasterSecretName=\"$MASTER_SECRET_NAME\" DesiredCount=\"1\"" \
     --tags="env=$ENV_NAME" \
@@ -101,3 +101,17 @@ sam deploy --stack-name="$ENV_NAME-app" \
 
 export PRIMARY_ALB=`aws cloudformation list-exports --query="Exports[?Name=='$ENV_NAME-LoadBalancer-DNSName'][Value]" --region=$PRIMARY_REGION --output=text`
 echo "PRIMARY_ALB=$PRIMARY_ALB"
+
+#### Delete All Lambda
+# Primary
+cd ./lambda/delete-posts
+sam build && sam deploy --stack-name="$ENV_NAME-lambda-delete-posts" \
+    --parameter-overrides="GhostUrl=\"$PRIMARY_ALB\"" \
+    --tags="env=$ENV_NAME" \
+    --capabilities="CAPABILITY_NAMED_IAM" \
+    --region=$PRIMARY_REGION \
+    --s3-bucket=$PRIMARY_BUCKET_NAME \
+    --no-fail-on-empty-changeset \
+    --template-file template.yaml || exit 2
+
+# After Ghost setup, lambda environment should be manually co-initialized with API key

@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  delete-posts
+Parameters:
+  GhostUrl:
+    Description: Admin ORL of the application
+    Type: String
+  Key:
+    Description: API Key
+    Type: String
+    Default: ""
+  Version:
+    Description: Api version
+    Type: String
+    Default: "v5.0"
+
+Resources:
+  helloFromLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/index.handler
+      Environment:
+        Variables: 
+          GHOST_URL: !Ref GhostUrl
+          KEY: !Ref Key
+          VERSION: !Ref Version
+      Runtime: nodejs20.x
+      Architectures:
+      - x86_64
+      MemorySize: 128
+      Timeout: 100
+      Description: A Lambda function that deletes all posts in Ghost
+      Policies:
+      - AWSLambdaBasicExecutionRole
